@@ -40,3 +40,147 @@
 
 ### 2. استقبال وتعديل بيانات أليس
 - البيانات من أليس بتيجي كـ JSON مع نصوص زيادة, زي:
+  Intercepted from Alice: {"p": "0x...", "g": "0x02", "A": "0x..."}- نظفنا البيانات باستخدام:
+```python
+data = data.replace("Intercepted from Alice:", "").strip()
+data = data.split("Send to Bob:")[0].strip()حللنا JSON بـ json.loads وعدّلنا \( g \) لـ hex(1) (يعني \( g = 1 \)).أرسلنا البيانات المعدلة لبوب.3. استقبال وتعديل بيانات بوببوب بيبعت بيانات زي:Send to Bob: Intercepted from Bob: {"B": "0x1"}نظفنا البيانات بـ:bob_data = bob_data.replace("Send to Bob:", "").replace("Intercepted from Bob:", "").strip()
+bob_data = bob_data.split("Send to Alice:")[0].strip()حللنا JSON, وتأكدنا إن \( B = 1 \) (وهو متوقع لأن \( g = 1 \)).عدّلنا \( B = hex(1) \) وأرسلناها لأليس.4. استقبال البيانات المشفرةأليس بتبعت النص المشفر كـ JSON:Send to Alice: Intercepted from Alice: {"iv": "...", "encrypted_flag": "..."}نظفنا البيانات بـ:encrypted_data = encrypted_data.replace("Send to Alice:", "").replace("Intercepted from Alice:", "").strip()
+encrypted_data = encrypted_data.split("Encrypted data:")[0].strip()حللنا JSON واستخرجنا:iv: متجه التهيئة (hex-encoded).encrypted_flag: النص المشفر (hex-encoded).حولناهم لبايتات باستخدام binascii.unhexlify.5. فك التشفيراشتقينا مفتاح AES من \( K = 1 \):K = 1
+key = hashlib.sha1(str(K).encode()).digest()[:16]استخدمنا مكتبة pycryptodome لفك تشفير النص بـ AES-CBC:cipher = AES.new(key, AES.MODE_CBC, iv)
+plaintext = cipher.decrypt(ciphertext)حاولنا نزيل الحشو (PKCS#7) بـ:padding_len = plaintext[-1]
+plaintext = plaintext[:-padding_len]لكن واجهنا مشكلة إن الحشو كان غير صالح, فطبعنا النص الخام بدون إزالة الحشو:plaintext.decode('utf-8', errors='ignore')النتيجة كانت العلم: crypto{n1c3_0n3_m4ll0ry!!!!!!!!}!التحديات والأخطاءرحلة الحل كانت مليانة تحديات, وكل خطأ علّمني حاجة جديدة:Timeout Error:الكود كان بيتوقف عند Waiting for data....الحل: أضفنا settimeout(10) ودالة recv_line لقراءة البيانات بدقة.JSONDecodeError:البيانات كانت بتيجي مع نصوص زيادة زي "Send to Bob:" و"Intercepted from Alice:".الحل: استخدمنا replace وsplit متعددة لتنظيف البيانات قبل json.loads.Invalid Padding:إزالة الحشو (PKCS#7) كانت بتفشل لأن plaintext[-1] كان قيمة غير صالحة.الحل: طبعنا النص الخام بدون إزالة الحشو, وطلع العلم!SyntaxError:واجهنا خطأ في كتلة except Exception as بدون متغير.الحل: عدّلناها لـ except Exception as e.الكود النهائيتحذير: الكود ده الحل الكامل للتحدي. لو عايز تحل بنفسك, بلاش تقراه!
+
+import socket
+import json
+import hashlib
+from Crypto.Cipher import AES
+import binascii
+
+# دالة لقراءة سطر واحد
+def recv_line(client):
+    data = b""
+    while not data.endswith(b'\n'):
+        chunk = client.recv(1)
+        if not chunk:
+            break
+        data += chunk
+    return data.decode()
+
+# الاتصال بالخادم
+print("[*] Connecting to socket.cryptohack.org:13371")
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.settimeout(10)
+try:
+    client.connect(('socket.cryptohack.org', 13371))
+except socket.timeout:
+    print("[!] Connection timeout. Check your internet and try again.")
+    client.close()
+    exit(1)
+
+# استقبال وتعديل بيانات أليس
+print("[*] Waiting for data from Alice...")
+try:
+    data = recv_line(client)
+    print(f"[*] Raw Alice data: {data}")
+    if data.startswith("Intercepted from Alice:"):
+        data = data.replace("Intercepted from Alice:", "").strip()
+    data = data.split("Send to Bob:")[0].strip()
+    print(f"[*] Cleaned Alice data: {data}")
+    alice_data = json.loads(data)
+    alice_data['g'] = hex(1)
+    client.send((json.dumps(alice_data) + '\n').encode())
+    print("[*] Sent modified Alice data (g = 1) to Bob")
+except socket.timeout:
+    print("[!] Timeout while receiving Alice data.")
+    client.close()
+    exit(1)
+except json.JSONDecodeError as e:
+    print(f"[!] JSON decode error: {e}")
+    print(f"[!] Raw data: {data}")
+    client.close()
+    exit(1)
+
+# استقبال وتعديل بيانات بوب
+print("[*] Waiting for data from Bob...")
+try:
+    bob_data = recv_line(client)
+    print(f"[*] Raw Bob data: {bob_data}")
+    bob_data = bob_data.replace("Send to Bob:", "").replace("Intercepted from Bob:", "").strip()
+    bob_data = bob_data.split("Send to Alice:")[0].strip()
+    print(f"[*] Cleaned Bob data: {bob_data}")
+    bob_data = json.loads(bob_data)
+    print(f"[*] Parsed Bob data: {bob_data}")
+    bob_data['B'] = hex(1)
+    client.send((json.dumps(bob_data) + '\n').encode())
+    print("[*] Sent modified data (B = 1) to Alice")
+except socket.timeout:
+    print("[!] Timeout while receiving Bob data.")
+    client.close()
+    exit(1)
+except json.JSONDecodeError as e:
+    print(f"[!] JSON decode error: {e}")
+    print(f"[!] Raw data: {bob_data}")
+    client.close()
+    exit(1)
+
+# استقبال البيانات المشفرة
+print("[*] Waiting for encrypted data...")
+try:
+    encrypted_data = recv_line(client)
+    print(f"[*] Raw encrypted data: {encrypted_data}")
+    encrypted_data = encrypted_data.replace("Send to Alice:", "").replace("Intercepted from Alice:", "").strip()
+    encrypted_data = encrypted_data.split("Encrypted data:")[0].strip()
+    print(f"[*] Cleaned encrypted data: {encrypted_data}")
+    encrypted_data = json.loads(encrypted_data)
+    print(f"[*] Parsed encrypted data: {encrypted_data}")
+except socket.timeout:
+    print("[!] Timeout while receiving encrypted data.")
+    client.close()
+    exit(1)
+except json.JSONDecodeError as e:
+    print(f"[!] JSON decode error: {e}")
+    print(f"[!] Raw data: {encrypted_data}")
+    client.close()
+    exit(1)
+
+# استخراج ciphertext و IV
+try:
+    iv = binascii.unhexlify(encrypted_data['iv'])
+    ciphertext = binascii.unhexlify(encrypted_data['encrypted_flag'])
+    print(f"[*] IV: {iv.hex()}")
+    print(f"[*] Ciphertext: {ciphertext.hex()}")
+except KeyError as e:
+    print(f"[!] Key error: {e}")
+    print(f"[!] Encrypted data: {encrypted_data}")
+    client.close()
+    exit(1)
+
+# اشتقاق مفتاح AES باستخدام K = 1
+K = 1
+key = hashlib.sha1(str(K).encode()).digest()[:16]
+print(f"[*] AES key: {key.hex()}")
+
+# فك تشفير AES-CBC
+try:
+    cipher = AES.new(key, AES.MODE_CBC, iv)
+    plaintext = cipher.decrypt(ciphertext)
+    print(f"[*] Raw decrypted plaintext (hex): {plaintext.hex()}")
+    # التحقق من الحشو (PKCS#7)
+    padding_len = plaintext[-1]
+    if 1 <= padding_len <= 16 and plaintext[-padding_len:] == bytes([padding_len]) * padding_len:
+        plaintext = plaintext[:-padding_len]
+        print(f"[*] Decrypted flag: {plaintext.decode()}")
+    else:
+        print(f"[!] Invalid padding: padding_len={padding_len}, plaintext={plaintext.hex()}")
+        print(f"[*] Decrypted flag (without padding removal): {plaintext.decode('utf-8', errors='ignore')}")
+except UnicodeDecodeError as e:
+    print(f"[!] Unicode decode error: {e}")
+    print(f"[*] Raw plaintext (hex): {plaintext.hex()}")
+    print(f"[*] Decrypted flag (raw): {plaintext.decode('utf-8', errors='ignore')}")
+except Exception as e:
+    print(f"[!] Decryption error: {e}")
+    client.close()
+    exit(1)
+
+# إغلاق الاتصال
+client.close()
